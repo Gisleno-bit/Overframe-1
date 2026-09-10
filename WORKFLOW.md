@@ -4,6 +4,10 @@
 > et Claude (Développeur autonome).
 > Mis à jour quand le processus change — pas à chaque session.
 
+Ces règles de validation s'appliquent aussi aux agents Codex. [AGENTS.md](AGENTS.md)
+définit leur coordination avec Claude. Une instruction humaine explicite prime ;
+une commande comme `/ship` ne constitue pas une autorisation de commit, push ou PR.
+
 ---
 
 ## 1. Le modèle de travail
@@ -15,7 +19,7 @@
 - Créer et maintenir les tests unitaires
 - Observer l'app via le serveur HTTP (screenshots, logs, état)
 - Débugger, analyser les logs, corriger les régressions
-- Ouvrir des Pull Requests documentées vers `dev`
+- Préparer des Pull Requests documentées vers `dev` ; pousser et les ouvrir seulement si l'humain l'a demandé
 - Mettre à jour TASKS.md, DEVLOG.md, et CLAUDE.md
 - Runner les checks : `pnpm typecheck && pnpm lint && pnpm test`
 
@@ -32,11 +36,11 @@
 
 | Action | Pourquoi |
 |---|---|
-| Push direct sur `main` | Risque de régression en prod |
+| Push direct sur `main` | Interdit par AGENTS.md ; intégration par PR |
 | Modifier le schéma electron-store sans migration | Corruption des données utilisateur |
 | Ajouter une dépendance npm | Risque supply chain, poids, licence |
 | Changer le comportement des raccourcis globaux | Impact direct sur l'expérience gaming |
-| Publier une release GitHub | Action irréversible et publique |
+| Publier une release GitHub ou pousser un tag déclenchant la release | Action publique réservée à l'humain |
 | Modifier `.github/workflows/` | Affecte la CI partagée |
 
 ---
@@ -52,8 +56,8 @@ Claude (session autonome)
   code + tests
         ↓
 Claude — Phase QA automatisée (OBLIGATOIRE avant tout commit)
-  pnpm typecheck && pnpm lint && pnpm test:coverage && pnpm build
-  lance l'app via devServer → screenshots → /overlay/eval → logs
+  pnpm typecheck && pnpm lint && pnpm test:coverage && pnpm build && pnpm smoke
+  si UI modifiée : lance l'app via devServer → screenshots → /overlay/eval → logs
   vérifie chaque feature modifiée visuellement et fonctionnellement
         ↓
 Claude → Humain — Checklist de validation
@@ -67,14 +71,14 @@ Humain — Garde-fou final
         ↓
 Claude — Commit uniquement après validation
   git commit avec message conventionnel
-  ouvre PR vers dev
+  push + PR vers dev seulement si autorisés par l'humain
         ↓
 Humain
   review PR (voir section 4)
   merge ou demande de correction
         ↓
 CI (automatique)
-  typecheck + lint + test + build sur dev
+  typecheck + lint + test:coverage + build ; build Windows natif séparé
         ↓
 Humain (périodique)
   merge dev → main quand stable
@@ -131,7 +135,7 @@ Humain (périodique)
 
 ### Ce qu'on review (altitude PR, pas ligne par ligne)
 
-1. **CI vert** — typecheck + lint + test + build passent
+1. **CI verte sur le commit de la PR** — typecheck + lint + test:coverage + build, ainsi que le job Windows ; un résultat historique ne valide pas le diff courant
 2. **DEVLOG.md** — lire l'entrée de session pour comprendre les décisions
 3. **Description de PR** — les critères d'acceptance sont-ils cochés ?
 4. **Tests** — y en a-t-il de nouveaux ? Sont-ils pertinents ?
@@ -176,6 +180,24 @@ pnpm build        # build de production sans erreur
 pnpm smoke        # boot réel de l'app + devServer répond + overlay + RAM
 ```
 
+Le seuil de couverture de `vitest.config.ts` est de 100 % sur une **allowlist de
+logique**, pas sur tout le produit. Le hook `scripts/pre-commit` ne lance que
+typecheck + lint ; les autres étapes restent obligatoires avant tout commit
+(§9). Vérifier le hook réellement installé dans chaque checkout : l'installateur
+`scripts/install-git-hooks.mjs` ignore les worktrees dont `.git` est un fichier.
+Les hooks Claude ne s'exécutent pas automatiquement dans Codex.
+
+`pnpm smoke` rebâtit le JavaScript puis lance l'app. Il vérifie le boot, les états
+show/hide, une réponse PNG et une RAM Electron positive et **< 500 MB** ; il ne
+valide ni le budget produit 150/300 MB, ni le rendu visuel, ni le contenu WebView2.
+Voir `scripts/smoke.mjs` et [.claude/guides/TESTING.md](.claude/guides/TESTING.md).
+Après modification native, exécuter aussi `pnpm build:addon` avant la QA runtime.
+
+Avant tout lancement, coordonner le propriétaire du runtime, vérifier le checkout
+et le build, et libérer le port 9119 avec son propriétaire. Ne pas arrêter une
+instance inconnue. Les profils navigateur et données utilisateur ne sont pas
+isolés par les worktrees.
+
 ### Étape 2 — Tests UI via devServer (Claude seul)
 
 L'app est lancée via le script Node.js (pas pnpm dev — voir ci-dessous) pour exécuter des vérifications automatisées :
@@ -184,10 +206,11 @@ L'app est lancée via le script Node.js (pas pnpm dev — voir ci-dessous) pour 
 // Lancement correct de l'app depuis un script Node.js (évite ELECTRON_RUN_AS_NODE)
 import electronPath from 'electron'
 import { spawn } from 'node:child_process'
+const root = process.cwd() // exécuter depuis la racine du checkout vérifié
 const childEnv = { ...process.env, NODE_ENV: 'development' }
 delete childEnv.ELECTRON_RUN_AS_NODE
 delete childEnv.ELECTRON_NO_ATTACH_CONSOLE
-const child = spawn(electronPath, ['out/main/index.js'], { cwd: root, env: childEnv, stdio: 'ignore', detached: true })
+const child = spawn(electronPath, ['out/main/index.js'], { cwd: root, env: childEnv, stdio: 'ignore', detached: true, windowsHide: true })
 child.unref()
 ```
 
@@ -198,6 +221,7 @@ Endpoints utilisés pour les tests automatisés :
 | `GET /ping` | L'app répond |
 | `GET /screenshot` | Capture visuelle de l'overlay (tab bar, adresse bar, UI chrome) |
 | `GET /state` | État structuré (tabs, profil actif, homepage, URLs) |
+| `GET /metrics` | Mémoire des processus Electron ; les processus Edge WebView2 sont exclus |
 | `GET /log/renderer?lines=50` | Erreurs JavaScript dans la renderer |
 | `GET /overlay/show` + `/hide` | Contrôle de l'état de l'overlay |
 | `GET /overlay/eval?js=<urlencoded>` | **Exécute du JS dans le renderer Electron** — accès à `window.aether.*` pour tester les IPC (save settings, update profile, open popup, etc.) |
@@ -206,14 +230,18 @@ Endpoints utilisés pour les tests automatisés :
 
 > **Important** : `/overlay/eval` s'exécute dans le renderer Electron (overlay chrome).
 > `/tab/eval` s'exécute dans le tab WebView2 (Edge) — `window.aether` n'y est PAS disponible.
+> Ces endpoints d'évaluation et de mutation ne sont pas des diagnostics en lecture
+> seule : ils peuvent modifier les données, naviguer ou déclencher une action IPC.
+> Le screenshot Electron ne prouve pas le rendu des enfants natifs WebView2 ou des
+> fenêtres compagnes ; observer aussi ces surfaces quand la modification les touche.
 
 **Scénarios de test systématiques pour chaque PR UI :**
 
 1. Screenshot overlay → vérifier tab bar, adressbar, icônes, texte lisible
 2. Naviguer vers un site connu (youtube.com) → vérifier favicon dans tab + adressbar
-3. Reset onboarding → screenshot step 1, 2, 3 via click JS
+3. Parcourir l'onboarding sur des données de test sauvegardées ; un reset du store détruit les données, ne pas l'appliquer au profil partagé sans autorisation
 4. `/overlay/eval` → lire et écrire un setting → vérifier persistance
-5. Ouvrir popup (settings, bookmark) → confirmer "ok" dans la réponse
+5. Ouvrir popup (settings, bookmark) → vérifier son état et son affichage ; une réponse "ok" seule ne confirme pas le rendu
 6. Vérifier logs renderer : zéro erreur, zéro SyntaxError
 
 ### Étape 3 — Checklist humain (présentée AVANT le commit)
@@ -251,7 +279,7 @@ Claude **attend** la réponse avant de committer.
 | Tests E2E gaming | Humain (manuel) | Flows in-game testés avant release | Test gaming réel |
 | Sécurité IPC | Claude | Checklist `.claude/guides/SECURITY.md` | Code review |
 | Accessibilité | Claude | WCAG AA minimum | `.claude/guides/ACCESSIBILITY.md` + test clavier |
-| Performance RAM | Claude | < 150MB idle | `curl /state` + Task Manager |
+| Performance RAM | Claude | Cible < 150 MB idle / < 300 MB actif ; arbitrage ouvert dans TASKS.md | `/metrics` pour Electron + comptage Windows des processus Edge WebView2 |
 | Performance CPU | Claude | < 2% idle | Task Manager |
 | UX/UI | Humain valide, Claude implémente | Décision produit | Screenshots PR |
 | Release | Humain | .exe installable, SmartScreen testé | `pnpm make` |
@@ -299,7 +327,7 @@ Claude **attend** la réponse avant de committer.
 
 ### Régression introduite par Claude
 
-1. `git revert <commit-sha>` — créer un commit de revert documenté
+1. Préparer un revert documenté avec `git revert --no-commit <commit-sha>` ; appliquer les gates QA et attendre la validation humaine avant de créer le commit de revert.
 2. Ajouter une entrée dans DEVLOG.md décrivant ce qui s'est passé
 3. Ajouter un test de régression avant de re-tenter le fix
 4. Ne jamais faire `git reset --hard` sur une branche partagée
@@ -314,7 +342,7 @@ Claude **attend** la réponse avant de committer.
 ### Données utilisateur corrompues (electron-store)
 
 1. NE PAS relancer l'app sans backup
-2. Copier `%LOCALAPPDATA%\Overframe\` vers un dossier de sauvegarde
+2. Copier le dossier réel `app.getPath('userData')` vers une sauvegarde (store `aether-store.json` ; voir `src/main/store/index.ts`). Ne pas confondre avec le répertoire d'installation Squirrel sous `%LOCALAPPDATA%\Overframe\`.
 3. Analyser le JSON manuellement
 4. Implémenter une migration dans `src/main/store/index.ts`
 
