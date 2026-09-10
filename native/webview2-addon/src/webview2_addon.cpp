@@ -266,6 +266,11 @@ static bool EnsureEnvironment(Napi::Env env) {
   // ReleaseChannels to kAllChannels — both required for a successful call.
   auto optsMake = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
   optsMake->put_AreBrowserExtensionsEnabled(TRUE);
+  // Electron and the WebView2 client DLL both register Chrome_WidgetWin_* in
+  // this process. Opt into WebView2's module suffix so Electron's later hidden
+  // window creation cannot select the WebView2 WndProc (hwnd_util fatal 1400).
+  // https://github.com/MicrosoftEdge/WebView2Feedback/issues/5540
+  optsMake->put_AdditionalBrowserArguments(L"--edge-webview-unique-window-class");
   ComPtr<ICoreWebView2EnvironmentOptions> opts = optsMake;
 
   // Helper: one synchronous attempt.  Pumps the message queue if the call
@@ -304,7 +309,11 @@ static bool EnsureEnvironment(Napi::Env env) {
   // If the existing profile was created before AreBrowserExtensionsEnabled was
   // set, WebView2 returns E_INVALIDARG.  Build a unique backup name so we
   // never collide with a leftover backup from a previous migration.
-  if (hr == E_INVALIDARG && !dataDir.empty()) {
+  // The loader may use an environment override instead of dataDir. Never rename
+  // the default user profile when the caller selected a different data folder.
+  const bool hasDataOverride =
+    GetEnvironmentVariableW(L"WEBVIEW2_USER_DATA_FOLDER", nullptr, 0) != 0;
+  if (hr == E_INVALIDARG && !dataDir.empty() && !hasDataOverride) {
     std::wstring backup = dataDir + L"_bak" + std::to_wstring(GetTickCount64());
     MoveFileExW(dataDir.c_str(), backup.c_str(), 0);
     hr = tryCreate(opts.Get());

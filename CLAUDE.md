@@ -106,7 +106,7 @@ The full API surface is in [src/preload/index.ts](src/preload/index.ts) — chec
 
 **History remains pending:** `better-sqlite3` is declared as a dependency, but no SQLite/history implementation or history IPC API exists under `src/`. Do not claim a history database is created.
 
-**Session gap:** autosave runs every 15s without waiting for first restore; a `--hidden` launch can overwrite the saved session before first show. Hidden profile switches also defer restore while autosave continues. Track this as a code issue, not completed recovery behavior.
+**Session ownership:** saves are allowed only after the selected profile's session has been restored successfully. Initial and hidden profile restoration remain deferred until show; pending or wrong-profile saves are ignored. Explicit hidden tab requests show/restore before adding the URL. The final snapshot is saved in before-quit before native teardown. Session and native shutdown checks pass on the runtime recorded in DEVLOG; crash-recovery UI remains unimplemented.
 
 **Key shared types** (see [src/shared/types.ts](src/shared/types.ts)):
 - `TabState` — id, url, title, favicon, isLoading, canGoBack, canGoForward

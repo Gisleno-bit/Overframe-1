@@ -26,6 +26,186 @@ Le hook `SessionStart` injecte automatiquement la **dernière** entrée (titre +
 
 ---
 
+## [2026-09-10] [FIX/QA] Collision HWND identifiée — sessions et shutdown vérifiés
+
+**Propriété :** reprise Codex sur `fix/session-restore-autosave`, base
+`79fcdd55819e5d5050fd72d3376b82ae4a8f49ee`. Travail précédent conservé.
+Trois revues (natif, Electron, régression), un seul propriétaire du runtime.
+L'humain autorise commit/push/PR/merge vers dev après gates. Aucun main, tag,
+release, workflow CI ou dépendance modifié.
+
+**Cause native confirmée :** le probe minimal Electron + addon inchangé échoue
+avec exit `0x80000003`, comme explicit-tab. Une trace locale WH_CBT capture la
+création tardive de `Chrome_WidgetWin_0` par Electron pendant la fermeture :
+parent desktop valide, HINSTANCE nul, mais procédure de classe appartenant à
+`EmbeddedBrowserWebView.dll`, au lieu de `electron.exe`. Controller Close a déjà
+détruit l'enfant WebView2 ; l'overlay et ses enfants Electron restent valides.
+Chromium 130 hwnd_util.cc:65 est CrashOther lors d'une création, pas GetClassName.
+Les anciens commentaires attribuant ce fatal à GetClassName ne sont pas une preuve.
+Défaut accessible en produit, indépendant du harnais/session. Close reste avant
+fermeture du host dans before-quit. Aucun rework SetParent/DestroyWindow, sleep
+ou exit forcé introduit dans le produit.
+
+**Correction minimale :** EnsureEnvironment passe
+`--edge-webview-unique-window-class` via AdditionalBrowserArguments. Après
+recompilation sans variable d'arguments, la trace montre
+`Chrome_WidgetWin_0_EmbeddedBrowserWebView` pour WebView2, la procédure Electron
+pour son propre `Chrome_WidgetWin_0`, puis will-quit et exit 0. Le précédent
+probe rapportait un échec avec ce flag sans preuve du suffixe effectif ; la
+vérification actuelle établit son effet via l'option compilée sur cette pile.
+
+[Microsoft décrit ce flag ciblé](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/webview-features-flags) ;
+[le suivi upstream décrit la même collision](https://github.com/MicrosoftEdge/WebView2Feedback/issues/5540).
+**Limite :** Microsoft déconseille les flags en production et prévient qu'ils
+peuvent changer/disparaître. Correctif de compatibilité vérifié pour intégration
+dev, aucune garantie d'API stable ou des anciens runtimes. Confirmer support et
+matrice avant release. Les revues convergent sur la cause et la correction locale ;
+la réserve de support est conservée, aucune release effectuée.
+
+**Session et isolement :** design précédent conservé : propriétaire restauré,
+sélection pending, snapshot avant teardown. La revue trouve une régression pour
+deux onglets de même URL : conserver leur identité dans le tableau filtré maintient
+le bon activeTabIndex. Deux tests échouent avant correction (1 au lieu de 2),
+passent après avec/sans domaine protégé. Captures du smoke bornées, sorties par
+signal détectées. Arguments et runtime WebView2 hérités retirés des tests.
+Le retry natif E_INVALIDARG pouvait renommer le dossier WebView2 par défaut malgré
+un override de test : migration ignorée si WEBVIEW2_USER_DATA_FOLDER est présent.
+Sans override, comportement conservé. Aucun store normal modifié.
+
+**Périmètre :** SessionManager, index, handlers, addon ; tests session existants et
+lifecycle (20 nouveaux cas au total) ; smoke/session-smoke, test-runtime/bootstrap,
+native-shutdown-smoke ; TASKS, CLAUDE, TECH_SPEC, PERFORMANCE et ce log.
+Probes/trace hors dépôt, aucun code debug livré ; historique DEVLOG conservé.
+
+**Vérification fraîche :** Node 24.19.0, Corepack pnpm 10.34.5 (auto-pin désactivé),
+Electron 33.4.11 / Chromium 130.0.6723.191, WebView2 152.0.4191.66, Windows x64.
+Typecheck, lint, build:addon, build, test (266/266), test:coverage (266/266 ;
+100 % statements/branches/functions/lines sur allowlist) et tests session (36/36)
+passent. `node scripts/session-smoke.mjs` : autosave masqué réel 15 s + quit,
+quit avant show, demande explicite/frontière settings, switches A/B et session C
+vide passent avec exit 0. `node scripts/native-shutdown-smoke.cjs` : quit immédiat,
+document prêt, host fermé/recréé, cleanup répété et will-quit passent. Check natif
+indépendant du bootstrap/session. pnpm smoke passe ; mesure Electron seule
+213.8 MB au premier passage, 203.3 MB après le guard final (plafond smoke 500 MB), pas le budget total produit. Syntaxe des cinq
+scripts et diff --check passent. Renderer : avertissement CSP déjà suivi,
+aucune nouvelle erreur ; PNG acquis sans validation visuelle native.
+
+**Outillage :** première tentative de commit arrêtée par le pnpm global 12.3.4 :
+il déclenche une installation puis refuse une sous-dépendance Git du lockfile
+(ERR_PNPM_EXOTIC_SUBDEP). node_modules a dû être restauré avec Corepack pnpm
+10.34.5 install --frozen-lockfile ; manifestes et lockfile inchangés. Un PATH local
+au processus fournit pnpm 10 au hook inchangé. Tous les gates et smokes relancés
+après restauration ; aucun bypass du hook ni modification globale de pnpm.
+**Prochaine étape :** support/runtime du correctif natif avant release, puis QA
+Windows packagée (quitAndInstall, arrêt Windows), compagnes et gaming. Ces flows
+ne sont pas prouvés par les tests actuels. Scope CSP/IPC/sécurité restant inchangé.
+Consulter Git/PR pour les identifiants et le statut d'intégration.
+
+---
+
+## [2026-09-10] [FIX/QA] Sessions différées protégées — intégration bloquée au quit natif
+
+**Propriété et périmètre :** Codex sur `fix/session-restore-autosave`, base
+`79fcdd55819e5d5050fd72d3376b82ae4a8f49ee` (dev du fork, PR #2 intégrée).
+L'humain autorise commit/push/PR/merge vers dev seulement avec vérifications propres.
+Aucun commit, push ni PR de ce correctif à ce stade ; main/upstream/releases inchangés.
+
+**Reproduction et cause :** les sauvegardes utilisaient le profil sélectionné sans
+savoir si ses onglets étaient restaurés. Au lancement masqué, le tableau vide
+écrasait la session ; après switch masqué, les onglets A pouvaient être écrits sous B.
+Avant correction, 8 des 14 premiers tests de cycle de vie échouaient ; le runtime
+isolé a aussi reproduit l'écrasement après le vrai timer d'autosave 15 s.
+
+**Invariant et cycle de vie :**
+
+- Startup/sélection masquée : restauration pending, aucun propriétaire prêt, aucune sauvegarde.
+- Avant switch : sauvegarder le propriétaire sortant tant qu'il est prêt.
+- Après sélection : invalider la propriété ; différer tant que l'overlay est masqué.
+- Au show : restaurer seulement la dernière sélection, puis autoriser ses sauvegardes.
+- Échec/restore partiel : aucune écriture autoritaire ; conserver la session et permettre un retry.
+- Quit : sauvegarder avant destruction des fenêtres dans `before-quit`, puis disposer
+  l'autosave et invalider la propriété avant fermeture des onglets.
+- Les sessions vides restent légitimes après restauration ; les domaines protégés
+  conservent leur transfert/dédoublonnage intentionnel entre profils.
+
+**Fichiers et décisions :** `SessionManager.ts` centralise ownership/pending ;
+`index.ts` utilise une seule restauration différée au lieu des deux chemins
+first-show/profile. `handlers.ts` interdit le bypass de `activeProfileId` via settings
+génériques ; l'IPC dédié conserve le cycle de vie. Une demande explicite d'onglet
+masqué montre/restaure d'abord la session pour ne pas perdre la nouvelle URL.
+Aucun schéma, raccourci global, dépendance déclarée ou workflow CI modifié.
+Tests existants adaptés + `SessionManager.lifecycle.test.ts` : 18 cas nouveaux
+(A–F, switches répétés, mauvais propriétaire, restore unique, échec/retry,
+réentrance, vide, disposal, domaines protégés).
+
+**Environnement et vérification fraîche :** installation avec `pnpm@10.34.5 install
+--frozen-lockfile` via Corepack, auto-pin désactivé ; Node hôte 24.19.0, Electron
+33.4.11 / Node embarqué 20.18.3 / Chromium 130.0.6723.191. Addon construit par le
+postinstall existant ; hook Git typecheck/lint installé. Manifestes/lockfile inchangés.
+Typecheck et lint passent ; 34 tests session passent ; couverture : 264 tests,
+16 fichiers de tests, 100 % statements/branches/functions/lines sur l'allowlist
+existante, pas sur tout le produit. Build passe. `pnpm test` passait au checkpoint
+précédent ; la couverture fraîche réexécute toute la suite. `pnpm smoke` passe
+(boot/show/hide/PNG et 220.5 MB Electron, seuil smoke <500 MB ; ni budget produit,
+ni mémoire WebView2, ni rendu visuel validés par ce chiffre).
+
+**Runtime isolé :** `scripts/test-runtime.mjs` et `test-bootstrap.cjs` créent un
+répertoire temporaire marqué, imposent userData/sessionData/WebView2 séparés avant
+chargement de l'app et neutralisent uniquement l'inscription Windows au démarrage.
+`smoke.mjs` réutilise ce lanceur. `node scripts/session-smoke.mjs` utilise l'Observer
+de son propre enfant et des pages HTTP loopback ; aucun store utilisateur normal
+réinitialisé. Les attentes sont bornées ; le test vérifie aussi l'exit d'un enfant
+déjà terminé. Scénarios sélectionnables : `hidden`, `hidden-quit`, `explicit-tab`,
+`profiles` (sans argument, tous dans cet ordre).
+
+- Démarrage masqué + autosave réelle + quit : PASS, données persistées intactes.
+- Quit immédiat avant premier show : PASS.
+- Demande d'onglet masqué + rejet du bypass settings : assertions PASS ; quit FAIL.
+- `node scripts/session-smoke.mjs profiles` : assertions de restauration visible,
+  switch masqué A→B, retour A, sauvegarde du bon profil et session vide C PASS ;
+  quit FAIL. Stores après crash vérifiés : A/B séparés, C vide ; la dernière URL
+  explicitement demandée reste sauvegardée dans A.
+- Logs renderer : avertissement CSP existant, aucun autre message dans la capture.
+  PNG produit, sans revendication de validation visuelle/native.
+
+**Blocage natif distinct :** après ouverture WebView2, le processus termine avec
+`FATAL:hwnd_util.cc(65) 1400`, exit `0x80000003`, pendant la fermeture du host
+Electron. Trace temporaire : nettoyage before-quit terminé, événement close, fatal,
+pas de will-quit. Le passage du save en before-quit protège le snapshot ; il ne
+résout pas ce crash. Reproduction minimale indépendante : BrowserWindow transparent
+frameless, loadURL data:, show, addon inchangé createTab/navigate about:blank/show,
+puis app.quit avec hide/destroyTab dans before-quit. Sans WebView2, exit 0 ; avec,
+même fatal. Attendre `executeScript('document.readyState') === "complete"` ne change
+pas le résultat. Fermer les onglets explicitement avant quit et libérer les
+fenêtres compagnes ne résout pas non plus le crash.
+
+La source Chromium exacte situe la ligne 65 dans `CrashOther` appelé lors d'un
+échec de création de fenêtre, et non dans GetClassName :
+[source Chromium 130](https://github.com/chromium/chromium/blob/130.0.6723.191/ui/gfx/win/hwnd_util.cc).
+Une collision de classes reste une hypothèse, pas une cause confirmée.
+Le flag de diagnostic Microsoft `--edge-webview-unique-window-class` n'a pas
+corrigé le probe ; aucun flag n'est conservé dans le produit ou le harnais.
+[Microsoft réserve ces flags au diagnostic](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/webview-features-flags).
+Le probe temporaire, la trace et la tentative spéculative de cleanup des compagnes
+ont été retirés ; seuls le correctif, les régressions et leur support restent.
+
+**Revues spécialisées :** architecture a retracé ownership et identifié la portée
+du fatal Chromium ; QA a conçu les régressions stateful A–F ; regression reviewer
+ne trouve pas de bloqueur dans le correctif session, mais maintient le quit natif
+comme bloqueur d'intégration. Son cas d'enfant déjà crashé est corrigé dans stop().
+
+**Contrôles mécaniques :** diff --check et syntaxe des quatre scripts passent ;
+liens locaux ajoutés et fences Markdown vérifiés. Historique DEVLOG identique
+octet par octet à la base Git après application de ses filtres de checkout CRLF.
+
+**Prochaine étape :** diagnostiquer/corriger la fermeture native sur cette pile sans
+affaiblir les tests, puis relancer les deux smokes, revoir le diff et intégrer via
+PR vers dev lorsque propre. Aucun contournement par sleep, exit forcé ou changement
+de version. QuitAndInstall packagé, arrêt Windows, gaming et installation réelle
+restent non validés ; ils ne sont pas couverts par les tests de session.
+
+---
+
 ## [2026-09-10] [DOCS] Réconciliation documentaire — revue finale et intégration autorisée
 
 **Contexte et propriété :** audit demandé par l'humain, piloté par Codex avec quatre

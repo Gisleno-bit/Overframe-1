@@ -168,7 +168,6 @@ function isValidExePaths(arr: unknown): arr is string[] {
 const SETTINGS_ALLOWLIST: ReadonlySet<keyof Settings> = new Set([
   'shortcuts',
   'startWithWindows',
-  'activeProfileId',
   'hasCompletedOnboarding',
   'showMemoryUsage',
   'performanceMode',
@@ -276,6 +275,9 @@ export function registerIpcHandlers(deps: Deps): void {
   // ─── Tabs ────────────────────────────────────────────────────────────
   ipcMain.handle(IPC.TabsCreate, (_e, url?: string) => {
     const target = isSafeBoundedUrl(url) ? url : (store.get('settings').homepageUrl || DEFAULT_HOMEPAGE)
+    // Explicit tab requests (including popup links) first establish the selected
+    // session's ownership. Otherwise deferred restoration would discard this tab.
+    if (overlay.getState() === 'HIDDEN') overlay.show()
     return tabs.create(target)
   })
   ipcMain.handle(IPC.TabsClose, (_e, id: string) => tabs.close(id))

@@ -341,9 +341,9 @@ interface TabState {
 
 [SessionManager.ts](../src/main/managers/SessionManager.ts) saves only HTTP(S) tabs in display order: URL, title, favicon, active index and timestamp. Runtime `TabState` additionally includes loading/navigation flags, `zoomFactor`, audio and mute state. **Zoom is not persisted in sessions.**
 
-Restore creates lazy tabs and activates the saved active tab. `onFirstShow` defers initial restoration; ordinary launch shows immediately, while `--hidden` defers it. Saves occur every 15 seconds, after tab removal with a 300 ms debounce, before profile switch, and at quit. Bounds have a separate 500 ms debounce.
+Restore creates lazy tabs and activates the saved active tab. The visible-state transition restores the pending initial/latest profile once; ordinary launch shows immediately, while `--hidden` defers it. Saves occur every 15 seconds, after tab removal with a 300 ms debounce, before profile switch, and in `before-quit` before tab teardown. Saves are accepted only for the successfully restored live-session owner, with no restoration pending. Bounds have a separate 500 ms debounce.
 
-**Unresolved implementation gaps:** zoom persistence and crash-recovery UI must not be described as complete. Autosave and quit save are not gated on first restoration: a `--hidden` launch can overwrite the previous session before it is shown. Hidden profile switches also defer restoration while autosave continues. These paths require a code fix and regression verification, outside this documentation-only change.
+**Unresolved implementation gaps:** zoom persistence and crash-recovery UI must not be described as complete. Deferred-session ownership and graceful native shutdown have regression checks. The addon opts into WebView2 module-specific window classes to prevent a same-process Chromium class collision; this runtime-dependent compatibility switch requires release follow-up (see TASKS/DEVLOG).
 
 Collection sharing sends exported fields, including optional notes/creator metadata/artwork. The UI first requests a network short code, falling back to local compressed Base64; imports also accept legacy uncompressed Base64. See `CollectionsManager.ts`, `useCollectionShare.ts` and SECURITY.md for worker retention and network limits.
 
