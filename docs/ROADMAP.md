@@ -7,6 +7,10 @@
 
 ## Version Philosophy
 
+Reconciled against local source `ce29252` on 2026-09-10. The package remains `0.2.0`; the local `v0.2.0` tag is `42008d7`, followed by Store groundwork, idle-memory improvements and AGENTS coordination on `dev`. Publication is recorded historically in DEVLOG, not reverified against GitHub here.
+
+The milestone numbers below are the original planning buckets, not the release contents or a current delivery schedule. `[x]` means implementation is present in the inspected code, not that gaming, installation or release acceptance passed. Definitions of Done remain acceptance goals. Use [TASKS.md](../TASKS.md) for current priorities and [WORKFLOW.md](../WORKFLOW.md) for human approval boundaries.
+
 ```
 v0.1 → v0.2 → v0.3   Alpha: core mechanics working
 v0.5 → v0.6           Beta: feature-complete, UX polish
@@ -21,14 +25,16 @@ v1.x                  Post-launch: community-driven
 **Goal**: Prove the overlay works. Nothing else matters until this is solid.
 
 ### Deliverables
-- [ ] Electron project scaffold (electron-vite + React + Tailwind + TypeScript)
-- [ ] Transparent, frameless, always-on-top BrowserWindow
-- [ ] One `WebContentsView` loading a URL
-- [ ] Global hotkey `Alt+B` toggles window show/hide
-- [ ] State machine: HIDDEN → FOCUSED → CLICK-THROUGH → HIDDEN
-- [ ] Click-through mode via `setIgnoreMouseEvents(true, { forward: true })`
-- [ ] Permanent 10px drag zone at top (always-clickable, ignores click-through state)
-- [ ] Window resizable
+- [x] Electron project scaffold (electron-vite + React + Tailwind + TypeScript)
+- [x] Transparent, frameless, always-on-top BrowserWindow
+- [x] Native Edge WebView2 tabs via `WebView2View` + C++ addon (replaced Electron `WebContentsView`)
+- [x] Global hotkey `Alt+B` toggles window show/hide
+- [x] State machine: HIDDEN → FOCUSED → CLICK-THROUGH → HIDDEN
+- [x] Click-through mode via `setIgnoreMouseEvents(true, { forward: true })`
+- [ ] Original permanent 10px drag-strip requirement — current implementation uses specific TabBar drag targets; product acceptance of the difference remains pending
+- [x] Window resizable
+
+Current core evidence: `OverlayWindow.ts`, `shortcutActions.ts`, `TabBar.tsx`. Automatic click-outside/inside transitions in the original acceptance flow below are not implemented; current click-through uses `Alt+C` and explicit UI controls. Hidden state uses immediate opacity/input changes followed by OS hide after 30 seconds.
 
 ### Definition of Done
 > I can press `Alt+B` while playing a borderless windowed game, see a browser appear on top, interact with it, click outside to enter click-through mode (overlay stays visible but mouse passes to game), press `Alt+B` again to hide it. I can drag the overlay from its top strip while in click-through mode. No crash. No flicker.
@@ -37,17 +43,17 @@ v1.x                  Post-launch: community-driven
 
 ## v0.2 — Alpha Browser (Week 3–4)
 
-**Goal**: Make it a real browser, not just a WebContentsView wrapper.
+**Goal**: Make it a real browser, not just a WebView2 wrapper.
 
 ### Deliverables
-- [ ] Address bar (URL input + search fallback)
-- [ ] Back / Forward / Refresh buttons
-- [ ] Favicon + page title in tab
-- [ ] Multi-tab support (TabManager + TabBar UI)
-- [ ] New tab button
-- [ ] Close tab button
-- [ ] Tab switching
-- [ ] Basic navigation events wired to UI (loading indicator, URL updates)
+- [x] Address bar (URL input + search fallback)
+- [x] Back / Forward / Refresh buttons
+- [x] Favicon + page title in tab
+- [x] Multi-tab support (TabManager + TabBar UI)
+- [x] New tab button
+- [x] Close tab button
+- [x] Tab switching
+- [x] Basic navigation events wired to UI (loading indicator, URL updates)
 
 ### Definition of Done
 > I can open multiple tabs, navigate between them, type URLs, and use browser navigation buttons.
@@ -59,16 +65,17 @@ v1.x                  Post-launch: community-driven
 **Goal**: Data survives across sessions.
 
 ### Deliverables
-- [ ] `electron-store` integration with typed schema (settings, profiles, collections)
-- [ ] `better-sqlite3` integration for history (local SQLite file, no server)
+- [x] `electron-store` integration with typed schema (settings, profiles, collections)
+- [ ] `better-sqlite3` history integration — dependency declared, no application DB/manager/IPC implementation
 - [ ] History: record every page visit (URL, title, favicon, timestamp) via SQLite INSERT
 - [ ] History panel UI (list + search)
-- [ ] **Link Collections**: create a collection, add/remove links, rename
-- [ ] Collections panel UI (list of collections + links within)
-- [ ] Pinned links quick-access bar (max 8, one-click access)
-- [ ] Window position/size persisted on close
-- [ ] Collection export as Base64 string
-- [ ] Collection import from Base64 string
+- [x] **Link Collections**: create a collection, add/remove links, rename
+- [x] Collections panel UI (list of collections + links within)
+- [x] Pinned links quick-access bar (max 8, one-click access)
+- [x] Window position/size persisted on close
+- [x] Collection export as deflate-compressed Base64 JSON
+- [x] Collection import from compressed or legacy Base64 JSON
+- [x] Short-code sharing with network upload, preview/import and local Base64 fallback (`useCollectionShare.ts`, IPC handlers, `scripts/share-worker`); service deployment not revalidated
 
 ### Definition of Done
 > My history and collections survive app restarts. I can create an "Elden Ring" collection, add links, export it as a Base64 string, clear it, and re-import it.
@@ -80,17 +87,21 @@ v1.x                  Post-launch: community-driven
 **Goal**: Make the experience feel personal and polished.
 
 ### Deliverables
-- [ ] Opacity slider (20–100%) — keyboard shortcut + settings UI
-- [ ] Global hotkey configurator (UI + conflict detection)
-- [ ] System tray icon (show/hide, settings, quit)
-- [ ] Settings panel (all preferences)
-- [ ] Start with Windows toggle
-- [ ] Per-game profiles: create, name, link to process names, set priority order
-- [ ] Process polling (game detection, profile auto-switch)
-- [ ] Conflict rule: highest-priority profile wins when multiple games detected
-- [ ] Tray tooltip shows active profile name
-- [ ] Default profile fallback
-- [ ] Donation button (Ko-fi link) in UI
+- [x] Opacity slider (20–100%) — keyboard shortcut + settings UI
+- [x] Global hotkey configurator via uiohook, with in-app duplicate-binding warnings
+- [ ] Detect shortcut conflicts with other applications (original requirement, not implemented)
+- [x] System tray icon, Show/Hide, Quit, active-profile tooltip
+- [ ] Tray Settings entry and active/hidden icon state (original requirements, not implemented)
+- [x] Settings panel for implemented preferences; history retention remains pending
+- [x] Start with Windows toggle
+- [x] Per-game profiles: create, name, process-name/path matching and stored priority
+- [ ] Confirm the original user-defined priority-order UI requirement; model/IPC priority support alone is not completion
+- [x] Game detection and profile auto-switch: 5-second active / 15-second hidden-default polling
+- [x] Conflict rule: highest-priority profile wins when multiple games detected
+- [x] Tray tooltip shows active profile name
+- [x] Default-profile fallback for a missing/deleted selected profile
+- [ ] Original automatic return to default when no game remains — current `ProfileManager` keeps the last game profile
+- [x] Donation links in UI; external page availability not checked
 
 ### Definition of Done
 > I can create an "Elden Ring" profile, launch Elden Ring, and Overframe automatically switches to that profile's collections.
@@ -102,15 +113,15 @@ v1.x                  Post-launch: community-driven
 **Goal**: Zero obvious bugs. Real-world testing.
 
 ### Deliverables
-- [ ] Anti-cheat disclaimer modal (first launch only)
-- [ ] Onboarding tooltip flow (first launch, 3 steps max)
-- [ ] Error handling: failed page load, network offline state
-- [ ] Context menu in WebContentsView (right-click: copy, paste, open in new tab)
-- [ ] Keyboard shortcuts (Ctrl+T new tab, Ctrl+W close tab, Ctrl+L focus address bar)
-- [ ] Multi-monitor support (remember which monitor the window was on)
-- [ ] Performance audit: idle CPU < 2%, hidden RAM < 150MB
-- [ ] Update check on launch (GitHub Releases)
-- [ ] App icon (all required sizes for Windows)
+- [ ] Anti-cheat disclaimer modal (first launch only) — not present in the current onboarding component
+- [x] Three-step onboarding overlay; fresh-install human validation remains open
+- [ ] Complete page-load/offline error UX; navigation watchdog, retry and process-failure handling exist in `TabManager`
+- [ ] Validate WebView2 native context menu and integrate any missing Overframe actions (copy, paste, open in an Overframe tab)
+- [x] Ctrl+T / Ctrl+W via global uiohook, Ctrl+L in the Electron renderer DOM; native WebView2 focus behavior still needs acceptance testing
+- [ ] Validate monitor-change behavior; saved bounds and display clamping exist
+- [ ] Meet performance targets: idle CPU < 2%, hidden RAM < 150MB / active < 300MB. Historical July audit reports ~256MB hidden for Electron alone; budget decision and complete WebView2-inclusive measurement remain open
+- [x] Packaged non-Store update checks: boot/hourly plus manual; Store guards present. Real installed update validation remains open
+- [x] Windows icon assets referenced by Forge and tray (`public/icons`); Store-specific submission assets are separate work
 
 ### Definition of Done
 > Tested by 5 external users. No P0/P1 bugs. All core flows work without assistance.
@@ -122,10 +133,12 @@ v1.x                  Post-launch: community-driven
 **Goal**: Ship it.
 
 ### Deliverables
-- [ ] Windows installer (`.exe` via electron-forge Squirrel, **unsigned**)
-- [ ] GitHub repository public (MIT license)
-- [ ] README with screenshots and GIF demo
-- [ ] README FAQ: SmartScreen workaround ("More info → Run anyway"), anti-cheat disclaimer, supported game modes
+- [x] Squirrel `.exe` + Windows ZIP configuration; unsigned packaging run recorded in July DEVLOG. Fresh-machine installation remains open
+- [x] MIT license file in repository
+- [ ] Verify repository visibility and release download availability before delivery
+- [x] README screenshots and setup instructions
+- [ ] GIF/demo on a real game (human capture)
+- [x] README FAQ: unsigned-packaging/download-source guidance, anti-cheat limitations and supported game modes
 - [ ] Ko-fi / PayPal donation page live
 - [ ] Release announcement (Reddit r/pcgaming, r/gaming, Discord gaming communities)
 
@@ -136,24 +149,29 @@ v1.x                  Post-launch: community-driven
 
 ## Post-Launch (v1.x) — Community-Driven
 
-Priorities ordered by expected user demand:
+Original candidate priorities; timing, demand and scope require product review. Implemented short-code sharing has moved above.
 
 | Version | Feature |
 |---|---|
-| v1.1 | Collection sharing via shareable link (server-side, opt-in) |
 | v1.1 | Publisher starter collections (official Base64 bundles embeddable in game wikis) |
-| v1.1 | Built-in ad blocker (uBlock-style filter lists) |
+| v1.1 | Replace currently unavailable adblock integration; any reprioritization requires owner approval |
 | v1.2 | Picture-in-Picture mode (mini compact view) |
 | v1.2 | Search within current page (`Ctrl+F`) |
 | v1.3 | Cloud sync (collections + profiles) — optional paid tier, privacy-first |
 | v1.3 | Community collection directory (browse & install community-curated packs) |
 | v1.4 | Custom CSS per site (gaming wiki cleanup profiles) |
 | v1.4 | Hotkey presets per game (disable conflicting alt-key combos) |
-| v1.5 | Code signing certificate (if donation revenue justifies the ~300€/year cost) |
-| v2.0 | macOS support |
+| v1.5 | Code signing certificate — obtain current pricing and product approval |
+| Unapproved proposal | macOS support — Windows-only remains binding until an explicit human decision, including after v1.0 |
 | v2.0 | Plugin system (community widgets) |
 
 ---
+
+## Current distribution work
+
+Store update guards and [submission draft](store/listing.md) are in this source; `forge.config.ts` still configures Squirrel/ZIP only. Cached remote branch `feat/msix-packaging` contains separate packaging work; coordinate ownership before resuming it. No Store submission/publication is established by this review. New dependencies and all releases require human approval.
+
+Implementation evidence for the checked items: `TabManager`, `AddressBar`, `TabBar`; `CollectionsManager`, `PinnedBar`, `SessionManager`, `store/index.ts`; `ProfileManager`, `ShortcutsSection`, `SettingsPanel`, `TrayManager`; `OnboardingOverlay`, `src/main/index.ts`, `forge.config.ts` and `README.md`.
 
 ## Known Hard Limits (Never Supported)
 
@@ -169,8 +187,8 @@ Priorities ordered by expected user demand:
 
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
-| Anti-cheat false positive reports | Medium | High | Clear disclaimer, user education, "competitive mode" (disable entirely) |
+| Anti-cheat false positive reports | Medium | High | Clear disclaimer, user education, "competitive mode" (disable entirely; proposal, not implemented). Compatibility requires human testing |
 | Z-order issues with specific game engines | Medium | Medium | Per-game workaround list in docs |
-| Memory pressure on low-end machines | Low | High | Background throttling, suspend hidden tabs |
-| Electron major version breaking change | Low | Medium | Pin minor Electron version, test before upgrade |
-| Low donation conversion | High | Low | DonationWare is sustainable at 1–2% if install base grows |
+| Memory pressure on low-end machines | Low | High | Delayed OS hide/throttling, media pause and optional about:blank unload; suspendAll only stops in-flight loads. Complete memory evidence remains pending |
+| Electron major version breaking change | Low | Medium | Pin minor Electron version, test before upgrade. Current declaration is `^33.0.0`; pinning remains unresolved |
+| Low donation conversion | High | Low | Validate funding assumptions; no conversion or sustainability outcome measured here |

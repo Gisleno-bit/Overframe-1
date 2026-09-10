@@ -26,6 +26,113 @@ Le hook `SessionStart` injecte automatiquement la **dernière** entrée (titre +
 
 ---
 
+## [2026-09-10] [DOCS] Réconciliation documentaire — revue finale et intégration autorisée
+
+**Contexte et propriété :** audit demandé par l'humain, piloté par Codex avec quatre
+revues spécialisées (architecture/docs, QA, sécurité/confidentialité, produit/backlog/landing).
+Checkout unique `C:\Users\super\Overframe\Overframe`, branche
+`chore/docs-reconciliation`, base `ce29252`. Cette branche existait déjà, propre,
+au même commit que `dev` et la référence locale `origin/dev` ; elle a été réutilisée.
+`dev` suit `origin/dev`, origin est le fork Gisleno-bit/Overframe-1 et upstream
+overframeapp-arch/Overframe. Vérification initiale des références Git locales,
+sans fetch ni reprise de l'ancien workflow de publication.
+
+**Périmètre :** documentation Markdown seulement : TASKS, CLAUDE, guides
+TESTING/PERFORMANCE/SECURITY, PRD/TECH_SPEC/ROADMAP, README public, documentation landing/Store/WORKSPACE et
+coordination WORKFLOW/`ship`. Aucun changement de code produit, dépendance déclarée
+ou CI. Les entrées historiques de ce journal sont conservées.
+
+**Corrections étayées par le code :**
+- Architecture : onglets Edge WebView2 pilotés par le main, raccourcis uiohook,
+  store `aether-store.json` sous `app.getPath('userData')`, profil navigateur
+  natif distinct. `better-sqlite3` est déclaré mais aucun historique SQLite
+  applicatif n'est implémenté dans `src/`. Zoom absent des champs de session
+  sauvegardés (SessionManager.ts:25–28).
+- QA : 15 fichiers de test ; seuils 100 % sur une allowlist de 15 sources
+  (`vitest.config.ts:19–40`), pas sur tout le produit. Le hook fourni ne lance que
+  typecheck/lint, contrairement au protocole pré-commit complet de WORKFLOW.
+- Performance : deep-hide OS après 30 s, fenêtres compagnes libérées et broadcast
+  mémoire uniquement visible ; suspension WebView2 non implémentée. `/metrics`
+  exclut Edge WebView2 (TabManager.ts:113–122) ; smoke teste un plafond Electron
+  de 500 MB (scripts/smoke.mjs:105–119), pas les cibles 150/300 MB.
+- Réseau : upload ET récupération de partage, mises à jour horaires hors Store,
+  actualités GitHub, ressources IG et favicons. Le worker versionné fixe une
+  expiration KV de 90 jours (scripts/share-worker/index.js:13,86). Ni déploiement
+  public ni traitement humain des suppressions validés.
+- Produit : distinguer code présent, exigences non réalisées et QA humaine ;
+  le tag local `v0.2.0` précède les chantiers Store et idle-memory, sans preuve
+  nouvelle sur les artefacts publiés. Les cibles RAM ne sont pas relevées.
+- Workflow : gate complet conservé, validation humaine avant commit, push/PR
+  seulement sur demande, merge/release réservés à l'humain. `/ship` ne constitue
+  pas une autorisation de publication.
+
+**Nouveaux risques de code à trier (analyse statique, pas des exploits reproduits) :**
+- Démarrage `--hidden` : restauration au premier show, mais autosave toutes les
+  15 s et sauvegarde au quit avant restauration possibles ; une session vide peut
+  remplacer la session précédente (index.ts:72,392–410,423–426 ;
+  SessionManager.ts:19–32,102–106). Un changement de profil masqué peut aussi
+  sauvegarder les anciens onglets sous le profil de destination (index.ts:243–253,410).
+- CSP en contradiction avec la politique : `unsafe-inline`, `unsafe-eval`,
+  origine script IG, HTTPS large (csp.ts:11–20). Fenêtres chrome
+  `sandbox:false`, contrôles IPC d'émetteur/arguments incomplets et absence de
+  garde de navigation chrome commune ; voir le guide SECURITY pour les preuves.
+- Import : `inflateSync` sans borne de sortie, parse de `null`/liens nuls
+  susceptible de lever hors du catch, GET de partage lu entièrement sans timeout
+  explicite avant contrôle de taille (CollectionsManager.ts:339–381 ;
+  handlers.ts:131–144). Aucun payload hostile exécuté.
+- Observer dev : routes eval/mutation sans authentification ni contrôle
+  Host/Origin/méthode ; garde `app.isPackaged` et écoute loopback présentes
+  (devServer.ts:28–32,120–172,213). Aucun appel à ces routes pendant l'audit.
+
+**Autres points à vérifier :** homepage du raccourci nouvel onglet vs réglage global
+(shortcutActions.ts:63–66) ; AppRestartToUpdate sans garde Store (handlers.ts:739–741) ;
+styles inline existants malgré la convention générale (voir CLAUDE.md).
+
+**Écarts ouverts :** budget RAM et mesure complète Windows ; remplacement adblock ;
+politique koffi ; historique SQLite, récupération de crash et zoom de session ;
+validation Google/Cloudflare, gaming, installation et publication Store.
+La page privacy TSX n'est pas éditée dans ce périmètre : ses promesses de localité,
+fréquence d'update, rétention et suppression doivent être corrigées séparément,
+avec validation des pratiques opérationnelles.
+
+**Vérification et limites :**
+- Git initial propre, branche/remotes/tracking/AGENTS confirmés ; inventaires,
+  scripts, configuration CI et code inspectés localement.
+- Vérification documentaire finale : 15 fichiers Markdown, 73 liens locaux résolus
+  hors exemples de code, 45 blocs de code équilibrés, aucun fichier non suivi ;
+  historique DEVLOG et contraintes permanentes TASKS inchangés, AGENTS intact.
+  Revue finale spécialisée : aucun blocage documentaire restant.
+- Hook effectif absent : `.git/hooks/pre-commit` introuvable et `core.hooksPath`
+  non configuré. Aucun hook installé ou modifié pendant cet audit.
+- `node scripts/check-dangerous-deps.mjs` exécuté : **échec, exit 1 sur koffi**.
+  Ce résultat confirme un conflit de politique connu ; le texte du script ne
+  prouve pas qu'un anti-cheat détecte effectivement l'application.
+- L'appel `pnpm` a été bloqué par la politique PowerShell. L'essai `pnpm.cmd`
+  a lancé de façon inattendue une résolution/téléchargement de dépendances ;
+  interrompu par Ctrl+C avant toute addition signalée. Aucun diff de manifest,
+  lockfile ou configuration de dépendances constaté. Des téléchargements de
+  cache ont eu lieu ; aucune dépendance n'a été ajoutée au dépôt.
+- Typecheck, lint, suite de tests, couverture, build, addon et smoke non exécutés
+  localement : toolchain node_modules absente lors de la revue finale. Aucun
+  pnpm, téléchargement de dépendances ou runtime lancé dans cette passe finale.
+  Les contrôles documentaires demandés sont réalisés ; les gates produit ne sont
+  pas déclarés verts. Le protocole général WORKFLOW demeure inchangé.
+
+**Revue finale et autorisation :** l'humain a ensuite autorisé explicitement le
+commit, push sur le fork, PR vers dev, merge si checks propres et synchronisation
+locale. Le fetch d'origin/dev confirme encore `ce29252` avant intégration. Le
+nettoyage restaure les règles fermes télémétrie/préchargement/pinning Electron,
+les versions cibles de roadmap et les exemples TECH_SPEC encore exacts ; le DDL
+historique proposé reste identifié comme non implémenté. Aucun ancien journal
+n'est réécrit. Le diff TECH_SPEC passe de 550 à 343 lignes modifiées.
+
+**Handoff :** intégrer via PR sur Gisleno-bit/Overframe-1, vérifier les checks et
+le diff distant avant merge, puis synchroniser dev. Git/PR portent l'état réel de
+cette intégration. Les risques de code et la copy publique restent des tâches
+séparées ; aucune release ou modification produit n'est autorisée par cet audit.
+
+---
+
 ## [2026-07-18] [DIAG+FIX] Attribution IG, mort de l'adblock (MV2), couverture 100%, smoke stable
 
 **Contexte :** L'utilisateur a validé un plan revenu v1.0 (release → distribution passive → attribution IG → loadouts). Premier chantier : diagnostiquer pourquoi les commissions IG ne tombent pas, puis solidifier la branche pour le merge.

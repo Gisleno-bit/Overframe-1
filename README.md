@@ -1,6 +1,6 @@
 # Overframe
 
-Free, open-source browser overlay for PC gamers. Press `Alt+B` to open a browser on top of any borderless game — no alt-tab, no injection, no anti-cheat risk.
+Free, open-source browser overlay for Windows gamers. Press `Alt+B` to toggle a browser over a borderless windowed game without Alt+Tab. Game and anti-cheat compatibility still require validation.
 
 **[overframe.app](https://overframe.app) · [Releases](https://github.com/overframeApp-arch/Overframe/releases) · Windows 10/11**
 
@@ -10,12 +10,12 @@ Free, open-source browser overlay for PC gamers. Press `Alt+B` to open a browser
 
 - Always-on-top Chromium browser overlay
 - Configurable global hotkey (default `Alt+B`)
-- Click-through mode — mouse passes to the game when overlay is unfocused
-- Per-game profiles with auto-detection (process name)
-- Per-tab zoom memory and live memory profiler
-- Performance Mode — frees GPU/RAM when overlay is hidden
+- Click-through mode — toggle with `Alt+C`; mouse passes to the game outside interactive UI regions
+- Per-game profiles with process-name/path and window-based detection
+- Per-tab zoom controls and a live Electron memory display (WebView2 memory is not included)
+- Performance Mode — unloads unprotected web pages while hidden; memory savings depend on the workload
 - Keyboard layout support: AZERTY, QWERTY, DVORAK
-- No code injection — safe by design
+- No game-process code injection
 
 ## Tech Stack
 
@@ -23,8 +23,8 @@ Free, open-source browser overlay for PC gamers. Press `Alt+B` to open a browser
 |---|---|
 | Shell | Electron |
 | UI | React + Tailwind CSS |
-| Web renderer | Microsoft Edge WebView2 (native addon, one process per tab) |
-| Storage | electron-store (profiles/collections/settings) + better-sqlite3 (history) |
+| Web renderer | Microsoft Edge WebView2 (native addon, shared environment with one controller per tab) |
+| Storage | electron-store (profiles/collections/settings/sessions), renderer localStorage, separate WebView2 site data; application history remains unimplemented |
 | Build | electron-vite + electron-forge |
 | Installer | Squirrel.Windows (`Overframe-Setup.exe`) |
 | Language | TypeScript |
@@ -32,10 +32,11 @@ Free, open-source browser overlay for PC gamers. Press `Alt+B` to open a browser
 ## Install
 
 1. Download `Overframe-Setup.exe` from the [Releases page](https://github.com/overframeApp-arch/Overframe/releases/latest).
-2. Run the installer. Windows SmartScreen will warn because the binary is not
-   yet code-signed — click **More info → Run anyway**.
-3. Overframe starts in the system tray. Press **`Alt+B`** over any borderless
-   windowed game to toggle the overlay.
+2. Run the installer. This repository's Squirrel packaging has no signing
+   configuration. If SmartScreen warns, verify the download source before
+   choosing whether to continue.
+3. Overframe opens the overlay and creates a tray icon. Press **`Alt+B`** to
+   toggle it. Launches through the Windows startup setting use hidden mode.
 
 ## Usage
 
@@ -45,8 +46,8 @@ Free, open-source browser overlay for PC gamers. Press `Alt+B` to open a browser
 | New tab | `Ctrl+T` |
 | Close active tab | `Ctrl+W` |
 | Focus address bar | `Ctrl+L` |
-| Drag the window | Drag the strip at the top |
-| Click-through mode | Click outside the chrome |
+| Drag the window | Drag a free area of the tab bar |
+| Click-through mode | `Alt+C` (configurable) |
 
 Game profiles live in **Settings → Game profiles**. Add the process name
 (e.g. `eldenring.exe`) and Overframe auto-switches profile when that game is
@@ -59,15 +60,15 @@ Link collections keep your builds, guides and wikis one click away, per game:
 ## FAQ
 
 **Windows says "Windows protected your PC" — is this safe?**
-The installer is not code-signed yet (certificates cost several hundred euros a
-year), so SmartScreen shows a warning for any new unsigned app. The code is
-open source — you can read every line. Click **More info → Run anyway**.
+The Squirrel packaging in this repository has no signing configuration. A warning
+alone does not establish whether a download is safe. Verify that your installer
+came from the project's release channel; the source is available for review.
 
 **Will this get me banned by anti-cheat?**
-Overframe never touches the game. It is a regular always-on-top window — no
-code injection, no memory reading, no DLL hooks, nothing an anti-cheat scans
-for. It is the same mechanism as a second monitor showing a browser. That said,
-if a game's rules worry you, check them — we cannot speak for every publisher.
+Overframe does not inject code into games or read gameplay memory. It uses a
+global keyboard hook and Windows process/window information for game detection.
+Those design choices do not guarantee compatibility with every anti-cheat
+system. Check the game's rules before using an overlay.
 
 **The overlay doesn't show above my game.**
 Your game must run in **borderless windowed** (or windowed) mode. In exclusive
@@ -76,26 +77,34 @@ can appear above it. Most modern games offer borderless windowed in their video
 settings.
 
 **Does Overframe block ads?**
-Not at the moment. The ad blocker we shipped (uBlock Origin) stopped working
-when Microsoft Edge removed Manifest V2 extension support in mid-2026 — this
-affects every Edge-based app. Edge's built-in tracker protection still runs. A
-replacement is on the roadmap.
+Ad blocking is currently unavailable and its Settings toggle is disabled. A
+replacement is tracked in [TASKS.md](TASKS.md).
 
 **Where is my data stored?**
-Everything stays on your machine (`%LOCALAPPDATA%\Overframe`). No account, no
-telemetry, no analytics.
+Settings, profiles, collections and tab sessions are stored in `aether-store.json`
+under Electron's user-data directory (`app.getPath('userData')`). Browser site data
+uses `%APPDATA%\Overframe\WebView2`; some UI state uses localStorage. The Squirrel
+installation directory under `%LOCALAPPDATA%\Overframe` is a different location.
+
+No Overframe account is required. No telemetry, no analytics. Creating a short
+share code uploads that collection, including exported notes, creator metadata
+and artwork. Sites, updates, release news, favicons and partner assets also use
+the network. See the [network inventory](.claude/guides/SECURITY.md).
 
 ## Develop
 
 ```powershell
-pnpm install        # installs deps + compiles native sqlite binding
+pnpm install        # installs deps, Git hook and native WebView2 addon
 pnpm dev            # electron-vite dev server
-pnpm build          # production bundle → out/
+pnpm build          # JavaScript production bundle → out/
+pnpm build:addon    # rebuild WebView2 addon after native changes
 pnpm make           # build + package installer → dist/
 pnpm typecheck      # type-check main + renderer
 pnpm test           # vitest unit tests
 ```
 
-Requires **Node 20+** and **pnpm 10+**. `better-sqlite3` compiles at install
-via `node-gyp` — needs **Visual Studio Build Tools** on Windows.
+The repository's CI uses **Node 20** and **pnpm 10**. Native builds require
+**Visual Studio Build Tools 2022** on Windows.
+Follow [AGENTS.md](AGENTS.md) and [WORKFLOW.md](WORKFLOW.md) for contribution gates
+and human validation before committing.
 

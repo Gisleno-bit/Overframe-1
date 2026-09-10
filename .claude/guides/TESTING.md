@@ -4,14 +4,15 @@
 
 ---
 
-## État actuel (à améliorer)
+## État vérifié dans le dépôt
 
-**1 fichier de test** (`heuristics.test.ts`, 30 tests) pour 42 composants + 5 managers.
-C'est l'angle mort le plus important du projet. L'objectif n'est pas 100 % de couverture — c'est de **tester ce qui casse silencieusement**.
+Inventaire au **2026-09-10**, base `ce29252` : **15 fichiers de test** dans `src/`. Ils couvrent CollectionsManager, SessionManager, les heuristiques de détection, les migrations du store, les actions de raccourcis, des helpers renderer, les stores Zustand et `hostMatch`. Les nombres de tests et les résultats verts du DEVLOG sont des preuves historiques ; cet inventaire ne remplace pas une exécution fraîche.
+
+La configuration impose **100 % statements/branches/functions/lines sur une allowlist de 15 fichiers source**. Ce n'est ni une mesure de toute la logique du produit, ni une couverture de toute l'application. Par exemple, `missionHelpers.test.ts` existe mais `missionHelpers.ts` ne figure pas dans l'allowlist. Les fenêtres Electron, le wiring IPC/preload, les composants React, TabManager/ProfileManager et les bindings natifs ne sont pas dans ce périmètre. L'objectif reste de **tester ce qui casse silencieusement**, avec une validation runtime complémentaire.
 
 Lancer : `pnpm test` · Couverture : `pnpm test:coverage` · Watch : `pnpm test:watch`
 
-Config : [vitest.config.ts](../../vitest.config.ts) — environnement `node`, alias `@shared`, exclut renderer `.tsx`, preload, et `main/index.ts` de la couverture.
+Config : [vitest.config.ts](../../vitest.config.ts) — environnement `node` par défaut, alias `@shared`, découverte `src/**/*.{test,spec}.{ts,tsx}`, provider V8. [vitest.setup.ts](../../vitest.setup.ts) fournit le mock Electron global. `missionsStore.test.ts` utilise déjà `// @vitest-environment happy-dom` pour le stockage navigateur.
 
 ---
 
@@ -21,21 +22,30 @@ Config : [vitest.config.ts](../../vitest.config.ts) — environnement `node`, al
 
 Fonctions sans effet de bord ni dépendance Electron. **Tout nouveau util/helper doit en avoir.**
 
-| Cible | Pourquoi |
+| Cible | État / suite utile |
 |---|---|
-| `heuristics.ts` | ✅ déjà couvert — modèle à suivre |
-| `CollectionsManager` (CRUD, export/import Base64) | Logique de données, régression = perte utilisateur |
-| `SessionManager` (restore/save) | Bugs = onglets perdus au redémarrage |
-| Validation des inputs IPC | Sécurité + robustesse |
-| Migrations de store | Une migration cassée corrompt les données |
+| `heuristics.ts` | Tests existants ; étendre aux nouvelles règles de détection |
+| `CollectionsManager` (CRUD, export/import compressé et format historique) | Tests existants ; préserver les régressions données, sections et liens |
+| `SessionManager` (restore/save/autosave) | Tests existants avec store et TabManager simulés ; ne prouvent pas une restauration native réelle |
+| Validation des inputs IPC | Pas de fichier de test des handlers dans l'inventaire actuel ; valider les entrées invalides et les flux légitimes |
+| Migrations de store | `src/main/store/index.test.ts` existe ; étendre à chaque évolution persistée |
 
 ### Priorité 2 — Managers avec dépendances Electron (mock requis)
 
-`TabManager`, `ProfileManager` dépendent de `electron`. Mocker l'API Electron (voir pattern plus bas).
+`TabManager`, `ProfileManager` dépendent d'Electron et/ou de services natifs. Aucun fichier de test dédié dans l'inventaire actuel. Tester les comportements isolables avec mocks (voir pattern plus bas), puis vérifier les interactions réelles avec WebView2, les fenêtres et la détection de jeu en runtime.
 
 ### Priorité 3 — Composants React (non couverts aujourd'hui)
 
-Nécessiterait `@testing-library/react` + environnement `happy-dom` (déjà dans les deps). À introduire pour les composants à logique (pas les purement présentationnels).
+Aucun test de composant `.test.tsx`/`.spec.tsx` dans l'inventaire actuel. `happy-dom` est déjà déclaré dans les devDependencies et utilisé par un test de store ; `@testing-library/react` n'est pas déclaré dans `package.json`. Si cette bibliothèque est retenue pour les composants à logique, son ajout nécessite l'accord humain prévu par WORKFLOW.md.
+
+---
+
+## Gates automatisés et portée
+
+- **Avant tout commit** : appliquer le gate complet de [WORKFLOW.md](../../WORKFLOW.md) §2bis/§9 : `pnpm typecheck` → `pnpm lint` → `pnpm test:coverage` → `pnpm build` → `pnpm smoke`, puis présenter la checklist et attendre la validation humaine. Un guide ou `/ship` abrégé ne dispense pas de ces étapes.
+- **Hook Git fourni** : [scripts/pre-commit](../../scripts/pre-commit) lance seulement typecheck + lint. Il ne remplace pas le protocole complet. Le `postinstall` appelle [install-git-hooks.mjs](../../scripts/install-git-hooks.mjs), qui ignore les checkouts où `.git` est un fichier (worktrees liés) ; vérifier le hook effectivement installé et `core.hooksPath` dans chaque checkout.
+- **CI configurée** : [.github/workflows/ci.yml](../../.github/workflows/ci.yml) lance typecheck + lint + test:coverage + build sous Ubuntu ; le job Windows (`windows-2022`) installe les dépendances et lance typecheck + build. Aucun smoke ni test gaming n'y est configuré. La présence du workflow ne prouve pas qu'un run distant récent est vert.
+- **Addon natif** : `pnpm build` ne reconstruit que le bundle Electron/Vite ; `pnpm smoke` appelle ce build puis le script smoke. Après modification native, lancer `pnpm build:addon` avant la QA runtime.
 
 ---
 
@@ -58,6 +68,8 @@ describe('maFonction', () => {
 ```
 
 ### Mocker Electron (pour les managers)
+
+Le mock partagé de `vitest.setup.ts` est déjà actif. Le compléter dans le test si nécessaire, sans utiliser le store utilisateur réel. Exemple de remplacement local :
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -84,7 +96,13 @@ Placer les tests **à côté** du fichier testé : `MonManager.ts` → `MonManag
 
 ---
 
-## Tests E2E (manuel, responsabilité Humain)
+## Smoke, vérification runtime et E2E gaming
+
+`pnpm smoke` construit puis lance la vraie app Electron via [scripts/smoke.mjs](../../scripts/smoke.mjs). Le script vérifie `/ping`, la forme minimale de `/state`, une mémoire positive inférieure à **500 MB**, les transitions logiques show/hide et une réponse PNG de plus de 1 000 octets. Il ne vérifie pas le respect des budgets 150/300 MB, le contenu visuel du PNG, un aller-retour IPC renderer, une navigation WebView2, ni le deep-hide OS après 30 s.
+
+La mémoire de `/metrics` provient des processus Electron (`app.getAppMetrics()`, private bytes avec repli working set) ; les processus Edge/WebView2 ne sont pas inclus. Un smoke vert ne prouve donc pas le budget RAM total de l'application. Voir [PERFORMANCE.md](PERFORMANCE.md) et les mesures Windows complémentaires.
+
+Le smoke refuse le lancement si une requête `/ping` répond déjà sur `127.0.0.1:9119`. Coordonner le propriétaire du runtime avant tout lancement : ce contrôle ne remplace pas l'identification de l'instance, du checkout et du build testés. Les endpoints `/overlay/show`, `/overlay/hide`, `/overlay/eval` et `/tab/eval` modifient l'état ou exécutent du code ; ils ne sont pas de simples lectures. Les captures Electron ne suffisent pas à valider le contenu natif WebView2.
 
 Vitest ne teste pas l'app réelle dans un jeu. Ces flows sont validés manuellement par l'humain avant release (voir [WORKFLOW.md](../../WORKFLOW.md) §4) :
 
@@ -94,7 +112,7 @@ Vitest ne teste pas l'app réelle dans un jeu. Ces flows sont validés manuellem
 - Comportement multi-écrans
 - Performance in-game ressentie
 
-Un setup Playwright + Electron est une option future (noté dans TASKS.md) mais hors scope tant que la couverture unitaire de base n'est pas en place.
+Aucun harnais Playwright/E2E automatisé n'est configuré dans le dépôt actuel. Son ajout éventuel ne remplace pas la validation Windows/in-game et doit respecter l'approbation des nouvelles dépendances.
 
 ---
 
@@ -105,4 +123,6 @@ Un setup Playwright + Electron est une option future (noté dans TASKS.md) mais 
 - [ ] Cas nominal + cas limites + cas d'erreur couverts
 - [ ] Vérifié que les tests échouent si on casse volontairement le code
 - [ ] `pnpm test` vert
+- [ ] `pnpm test:coverage` respecte les seuils sur l'allowlist ; aucun résultat historique présenté comme fraîchement exécuté
 - [ ] Pas d'I/O réelle (réseau, fs) — mocks ou temp uniquement
+- [ ] Gates complets de WORKFLOW.md et vérification runtime pertinente réalisés avant commit ; checks non exécutés explicitement signalés

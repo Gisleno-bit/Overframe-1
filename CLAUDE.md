@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-Overframe is a **Windows-only Electron desktop app** — a lightweight transparent browser overlay for gamers. Press `Alt+B` (configurable) to toggle a Chromium browser window on top of any borderless windowed game without Alt+Tabbing. It supports per-game profiles, tab sessions, link collections, global hotkeys, and system tray integration.
+Overframe is a **Windows-only Electron desktop app** — a lightweight transparent browser overlay for gamers. Press `Alt+B` (configurable) to toggle an Electron shell with Edge WebView2 tabs over borderless windowed games without Alt+Tabbing. It supports per-game profiles, tab sessions, link collections, global hotkeys, and system tray integration.
 
 ---
 
@@ -31,27 +31,27 @@ pnpm build
 pnpm make
 ```
 
-**To launch and observe the running app**, use the `/run` skill — it starts `pnpm dev`, opens the Electron window, and can take screenshots. Use `/verify` to confirm a specific feature works after a change.
+**To launch and observe the running app**, follow WORKFLOW and coordinate runtime ownership first. The repository has no `/run` or `/verify` command; `pnpm dev` and the Observer provide the documented workflow. After native C++ changes, run `pnpm build:addon` before runtime QA; `pnpm build` alone rebuilds JavaScript.
 
 The landing page (Next.js, separate workspace) runs with `pnpm landing`.
 
 ---
 
-## Architecture — Three Processes
+## Architecture — Main, Shell and Web Content
 
 ```
 Main Process (Node.js)
   ├─ Managers: TabManager, ProfileManager, CollectionsManager, SessionManager, ShortcutManager
   ├─ electron-store (persistent JSON: profiles, collections, settings)
-  ├─ better-sqlite3 (tab history)
+  ├─ TabManager → WebView2View → native WebView2 addon (owned by main)
   └─ IPC handlers (src/main/ipc/)
            ↕ contextBridge (src/preload/index.ts)
 Renderer Process (React + Zustand)
   ├─ window.aether.* — the entire IPC API surface
   └─ src/renderer/store/ — Zustand stores (appStore, missionsStore)
-           ↕ WebView2 native addon (per tab)
+Web tabs are controlled by main, not directly by the React renderer.
 Web Content Layer
-  └─ Microsoft Edge WebView2 per tab — separate OS process, no preload, no Node access
+  └─ Microsoft Edge WebView2 controllers — Edge processes, no Electron preload or Node access
 ```
 
 **Rule:** The renderer has zero Node.js access. Every OS operation goes through `window.aether.*` → preload → IPC handler → main process manager.
@@ -67,8 +67,8 @@ Web Content Layer
 | [src/renderer/App.tsx](src/renderer/App.tsx) | React root, IPC subscriptions, event listeners |
 | [src/renderer/store/appStore.ts](src/renderer/store/appStore.ts) | Central Zustand store (tabs, profiles, collections, UI state) |
 | [src/main/managers/TabManager.ts](src/main/managers/TabManager.ts) | WebView2 tab lifecycle, navigation, zoom, mute, downloads |
-| [src/main/managers/ProfileManager.ts](src/main/managers/ProfileManager.ts) | Game process detection (polls every 5s), profile switching |
-| [src/main/store/index.ts](src/main/store/index.ts) | electron-store schema + defaults |
+| [src/main/managers/ProfileManager.ts](src/main/managers/ProfileManager.ts) | Game detection via ps-list/native inspection; 5s active / 15s idle polling |
+| [src/main/store/index.ts](src/main/store/index.ts) | Store interface, defaults and migrations (no JSON Schema validator supplied) |
 | [src/shared/types.ts](src/shared/types.ts) | All shared TypeScript types (TabState, Profile, Collection, etc.) |
 | [src/shared/ipc.ts](src/shared/ipc.ts) | IPC channel name constants |
 
@@ -79,31 +79,34 @@ Web Content Layer
 All IPC calls are typed end-to-end. Never use raw `ipcRenderer` in the renderer — always go through `window.aether`.
 
 ```typescript
-// In renderer:
-const tabs = await window.aether.tabs.getAll()
+// Renderer: getAll returns both tabs and activeId.
+const { tabs, activeId } = await window.aether.tabs.getAll()
 await window.aether.tabs.create('https://google.com')
 
-// In main (src/main/ipc/):
-ipcMain.handle('tabs:create', (_, url) => tabManager.createTab(url))
-
-// Renderer-side event subscriptions:
-window.aether.on.tabUpdated((tab) => setTabs(...))
+// Event subscriptions return a cleanup function.
+const unsubscribe = window.aether.on.tabUpdated((tab) => {
+  console.log(tab.id, tab.title)
+})
+unsubscribe() // call when the consumer unmounts
 ```
 
-The full API surface is in [src/preload/index.ts](src/preload/index.ts) — check this file to know what's available before adding new IPC channels.
+The full API surface is in [src/preload/index.ts](src/preload/index.ts) — check this file to know what's available before adding new IPC channels. Declare channels in `src/shared/ipc.ts` and validate arguments at runtime in main before calling managers; static typing is not input validation.
 
 ---
 
 ## Data Models
 
-**electron-store** (JSON, at `%LOCALAPPDATA%\Overframe\`):
+**electron-store** (`aether-store.json` under `app.getPath('userData')`; resolve for the running build):
 - `profiles` — game profiles with process names, opacity, window bounds, homepage
 - `collections` — named link collections scoped to a profile (or `shared`)
-- `sessions` — per-profile tab session (URLs, active tab, zoom)
-- `settings` — hotkey, search engine, startup preference
+- `sessions` — HTTP(S) URLs, titles, favicons, active index and timestamp per profile; zoom is runtime-only and is not saved
+- `settings` — shortcut map, search/homepage, startup, detection, performance and other preferences; fresh `startWithWindows` defaults to true
 
-**SQLite** (better-sqlite3, same data dir):
-- `history` table: `id, url, title, favicon, visited_at`
+**Other persistence:** detection exclusions, deleted-profile snapshots and migration markers also live in the store. `sessionDirty` is set at startup/quit, but no crash-recovery reader exists. Renderer mission/UI state also uses localStorage. WebView2 site data uses `%APPDATA%\Overframe\WebView2` in the native addon.
+
+**History remains pending:** `better-sqlite3` is declared as a dependency, but no SQLite/history implementation or history IPC API exists under `src/`. Do not claim a history database is created.
+
+**Session gap:** autosave runs every 15s without waiting for first restore; a `--hidden` launch can overwrite the saved session before first show. Hidden profile switches also defer restore while autosave continues. Track this as a code issue, not completed recovery behavior.
 
 **Key shared types** (see [src/shared/types.ts](src/shared/types.ts)):
 - `TabState` — id, url, title, favicon, isLoading, canGoBack, canGoForward
@@ -115,25 +118,25 @@ The full API surface is in [src/preload/index.ts](src/preload/index.ts) — chec
 
 ## Overlay Behavior
 
-Three states toggled by `Alt+B` and mouse interaction:
-- `HIDDEN` — window invisible
+Three states controlled by visibility and click-through actions (`Alt+B` / `Alt+C` by default):
+- `HIDDEN` — opacity zero immediately; OS hide and shell background throttling after 30s
 - `FOCUSED` — browser receives input, game does not
-- `CLICK-THROUGH` — overlay visible but `setIgnoreMouseEvents(true, {forward:true})` — game receives all input
+- `CLICK_THROUGH` — visible with mouse forwarding outside regions made interactive by renderer hit-testing
 
-The 10px drag strip at the top is always clickable regardless of click-through state.
+Click-through uses renderer hit-testing for UI/drag regions; there is no permanently clickable strip while hidden. Hide/show preserves the previous click-through state.
 
-Window is always-on-top at `'screen-saver'` level to appear above borderless windowed games.
+While visible, the window uses always-on-top at `'screen-saver'` level; hide clears it. Normal startup shows the overlay; `--hidden` defers showing and initial session restoration.
 
 ---
 
 ## Global Hotkeys
 
-Registered via `uiohook-napi` (WH_KEYBOARD_LL), not Electron `globalShortcut`, so they work even when a game has keyboard focus:
+Registered via `uiohook-napi` (WH_KEYBOARD_LL), not Electron `globalShortcut`. Bindings are global; real gaming compatibility still requires human validation:
 - `Alt+B` — toggle overlay (default, configurable)
 - `Ctrl+T` / `Ctrl+W` — new/close tab
-- `Alt+[` / `Alt+]` — opacity down/up
+- `Ctrl+Shift+Down` / `Ctrl+Shift+Up` — opacity down/up in 0.05 steps
 
-See [src/main/managers/ShortcutManager.ts](src/main/managers/ShortcutManager.ts) and [src/main/managers/uiohook.ts](src/main/managers/uiohook.ts).
+See [src/main/managers/ShortcutManager.ts](src/main/managers/ShortcutManager.ts) and [src/main/managers/uiohook.ts](src/main/managers/uiohook.ts); defaults are in `src/shared/types.ts`. Changes to global shortcut behavior require explicit human approval.
 
 ---
 
@@ -143,8 +146,8 @@ See [src/main/managers/ShortcutManager.ts](src/main/managers/ShortcutManager.ts)
 - **IPC channels** — always defined as constants in [src/shared/ipc.ts](src/shared/ipc.ts)
 - **Zustand** in renderer for UI state; **electron-store** in main for persistence
 - **React components** in `src/renderer/components/`, flat or single-folder per component
-- **No analytics, no telemetry** — all data stays local
-- **Tailwind** for all styling — no inline styles, no CSS modules
+- **No analytics, no telemetry** — local persistence with explicit network features listed in the security guide; no expansion of egress without review
+- **Tailwind** for all styling — no inline styles, no CSS modules. Existing dynamic inline styles (for example TabBar sizing) conflict with the blanket rule and require explicit reconciliation before treating them as approved exceptions.
 - Lint: `pnpm lint` | Type-check: `pnpm typecheck` | Tests: `pnpm test`
 
 ---
@@ -163,7 +166,7 @@ Lire le guide correspondant avant toute modification dans ce domaine :
 | Coordination H/IA | [WORKFLOW.md](WORKFLOW.md) | Début de session, ouverture de PR |
 | Backlog | [TASKS.md](TASKS.md) | Début et fin de chaque session |
 
-**Les corps de métier sont automatisés** (pas seulement documentés) :
+**Dans Claude Code**, les hooks et commandes du dépôt assurent une partie de la coordination. Ils ne s’exécutent pas automatiquement dans Codex : suivre [AGENTS.md](AGENTS.md) et reproduire leur intention explicitement.
 - **Routage auto** : le hook `guide-router` injecte le bon guide quand tu édites un fichier du domaine (IPC→Sécurité, tabs→Performance, composant→A11y).
 - **Subagents spécialisés** (`.claude/agents/`) : `security-reviewer`, `qa-tester`, `perf-auditor`, `a11y-reviewer` — délègue-leur la revue/les tests de leur domaine.
 - **Slash commands** (`.claude/commands/`) : `/review-security`, `/cover <fichier>`, `/ship` (Definition-of-Done complète).
@@ -201,13 +204,15 @@ overframe/                  ← root (Electron app)
 
 | Concern | Mitigation |
 |---|---|
-| Renderer XSS | `contextIsolation: true`, no Node access in renderer |
+| Renderer XSS | `contextIsolation: true`, `nodeIntegration: false`; current shell/popups use `sandbox: false`, an explicit isolation review item |
 | Web content privilege escalation | Tabs render in Edge WebView2 (separate OS process) — no Electron preload, no Node bridge |
 | Dangerous navigation | `isSafeUrl()` on renderer requests + non-http(s)/about navigations cancelled in the addon's `NavigationStarting` |
 | New window popups | Open in new Overframe tab via the addon's `NewWindowRequested` (http/https only) |
-| Data exfiltration | Local storage only. Sole sanctioned main-process egress: the user-triggered collection share upload (`collections:share` → share worker) and update-electron-app's GitHub release checks. Any other outbound call from main is a red flag |
+| Network boundaries | Existing main egress: user-triggered collection share upload and short-code retrieval, plus packaged non-Store update checks/downloads. Renderer news, partner assets and favicons also make requests; see SECURITY.md. Existing calls do not authorize new egress |
 
 ---
+
+The CSP in `src/main/lifecycle/csp.ts` currently includes `unsafe-inline`, `unsafe-eval` and a remote script origin, conflicting with the security guide. Preserve the stricter policy and track remediation; this documentation does not approve that conflict.
 
 ## Hot Reload Rules
 
@@ -215,7 +220,7 @@ overframe/                  ← root (Electron app)
 |---|---|
 | Renderer (`src/renderer/**`) | Nothing — Vite HMR reloads instantly |
 | Preload (`src/preload/**`) | Reload the window (Ctrl+R in DevTools, or restart) |
-| Main process (`src/main/**`) | **Full restart** — kill `pnpm dev` and relaunch |
+| Main process (`src/main/**`) | **Full restart** of the instance you own; coordinate before stopping any shared runtime |
 | Shared types (`src/shared/**`) | Full restart (consumed by both sides) |
 
 ---
@@ -223,7 +228,7 @@ overframe/                  ← root (Electron app)
 ## Observer HTTP Server (Dev Mode)
 
 Quand l'app tourne (`pnpm dev`), un serveur HTTP démarre sur `http://127.0.0.1:9119`.
-Il expose screenshots, logs et état structuré — utilisable directement depuis bash, sans ouvrir les DevTools.
+Il expose screenshots, logs et état structuré. Réserver le runtime, vérifier le checkout/build, et ne pas remplacer une instance appartenant à un autre agent. `/overlay/eval` et les routes de contrôle modifient l’app ; ce ne sont pas des diagnostics en lecture seule.
 
 ```bash
 # Santé — confirme que l'app est prête
@@ -235,7 +240,7 @@ curl http://127.0.0.1:9119/screenshot --output C:\tmp\screen.png
 # État structuré JSON (overlay state, onglets ouverts, profil actif)
 curl http://127.0.0.1:9119/state
 
-# RAM réelle vs budget documenté (150 MB caché / 300 MB actif), flag withinBudget
+# RAM des processus Electron uniquement (Edge/WebView2 exclu) vs budget 150/300 MB
 curl http://127.0.0.1:9119/metrics
 
 # Piloter l'overlay depuis le terminal (utile avant un screenshot)
@@ -262,9 +267,9 @@ curl "http://127.0.0.1:9119/log/renderer?lines=50"
 
 | Source | Fichier |
 |---|---|
-| Shell React (renderer) | `%LOCALAPPDATA%\Overframe\logs\renderer.log` |
-| Onglets navigateur (WebContentsView) | `%LOCALAPPDATA%\Overframe\logs\webview.log` |
-| Crashes / erreurs fatales | `%LOCALAPPDATA%\Overframe\logs\crash.log` |
+| Shell React (renderer) | `app.getPath('userData')/logs/renderer.log` (dev) |
+| Onglets WebView2 | Route `webview.log` conservée, mais aucun producteur console WebView2 connecté dans le code actuel |
+| Crashes / erreurs fatales | `app.getPath('userData')/logs/crash.log` |
 
 **DevTools & utilitaires :**
 ```js
@@ -273,10 +278,9 @@ window.aether.system.devStoreReset()    // efface le store et relance
 window.aether.system.simulateCrash()    // écrit une entrée crash.log de test
 ```
 
-**Données persistées :**
-```powershell
-ls "$env:LOCALAPPDATA\Overframe\"   # store JSON + SQLite history
-```
+**Données persistées :** le menu système `openFolder('userData')` ouvre le répertoire résolu par Electron. Ne pas le confondre avec l’installation Squirrel sous `%LOCALAPPDATA%\Overframe`.
+
+**Limites Observer :** `/screenshot` capture le renderer Electron via `capturePage()` et ne prouve pas le rendu des fenêtres natives WebView2. `/metrics` ignore leur mémoire (`privateKb: 0` par onglet) ; `withinBudget` compare des MB arrondis avec `<=`. Des logs vides et un smoke vert ne prouvent donc pas le bon fonctionnement des pages natives.
 
 ---
 
@@ -294,34 +298,27 @@ dev           ← integration branch — all features merge here
 - Always branch off `dev`
 - Commit style: `feat: ...` / `fix: ...` / `chore: ...` (conventional commits)
 - Merge back to `dev` via PR — never push directly to `main`
-- Run `pnpm check` (typecheck + lint) before any commit
+- `pnpm check` is only typecheck + lint. Before any commit, complete WORKFLOW's full gate (`typecheck`, `lint`, `test:coverage`, `build`, `smoke`) and obtain human validation. Commit/push/PR/release authorization must follow the current human instruction and AGENTS.md.
 
 ---
 
 ## Environment Variables
 
-File: `.env` at root (gitignored).
-
-| Variable | Purpose |
-|---|---|
-| `GOOGLE_CLIENT_ID` | OAuth — not required for core functionality in dev |
-| `GOOGLE_CLIENT_SECRET` | OAuth — not required for core functionality in dev |
-
-The app runs fully offline without these. They're only needed for any future Google-linked features.
+No `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` consumer exists in current `src/`; the former OAuth table described future work, not setup requirements. Web browsing and existing update/share/partner features use the network.
 
 ---
 
 ## Workflow Autonome Complet
 
 ### Démarrer une session
-1. Lire [TASKS.md](TASKS.md) → choisir la tâche prioritaire, la déplacer dans "En cours"
-2. Lire [.claude/DEVLOG.md](.claude/DEVLOG.md) → reprendre le contexte de la dernière session
-3. `pnpm dev` → attendre `[dev] Observer → http://127.0.0.1:9119`
+1. Vérifier Git/branche/worktrees selon [AGENTS.md](AGENTS.md), puis lire WORKFLOW et TASKS. Respecter la tâche humaine explicite et coordonner la propriété avant toute modification.
+2. Lire les entrées pertinentes de [.claude/DEVLOG.md](.claude/DEVLOG.md) en vérifiant leurs dates ; la première entrée n’est pas nécessairement la plus récente.
+3. Si un test runtime est requis et après coordination : `pnpm dev` → attendre `[dev] Observer → http://127.0.0.1:9119`.
 4. `curl http://127.0.0.1:9119/ping` → confirmer que l'app répond
 
 ### Observer l'UI
 ```bash
-# Montrer l'overlay (il est caché au démarrage) — simuler Alt+B depuis le terminal :
+# Montrer l'overlay si nécessaire (`--hidden` le masque au démarrage) :
 # (ou l'appuyer manuellement une fois)
 
 # Screenshot
@@ -333,7 +330,7 @@ curl http://127.0.0.1:9119/state
 ```
 
 ### Après chaque modification
-- Le hook `PostToolUse` lance ESLint (`--max-warnings 0`) sur le fichier édité — les erreurs sont remontées dans ton contexte, corrige-les
+- Dans Claude Code, le hook `PostToolUse` lance ESLint (`--max-warnings 0`) sur le fichier édité — les erreurs sont remontées dans ton contexte, corrige-les
 - Pour une vérification complète : `pnpm typecheck && pnpm lint && pnpm test:coverage` (couverture 100% requise sur le périmètre logique)
 - Si modification main/preload : `pnpm smoke` lance la vraie app et vérifie boot + overlay + screenshot + RAM via le devServer
 - Si modification main/preload : redémarrer `pnpm dev` (hot reload ne couvre pas le main process)
@@ -381,7 +378,7 @@ child.unref()
 5. Mettre à jour [TASKS.md](TASKS.md) — déplacer les tâches terminées dans "Done"
 6. Mettre à jour [.claude/DEVLOG.md](.claude/DEVLOG.md) — nouvelle entrée avec contexte, décisions, prochaine étape
 
-### Hooks automatiques
+### Hooks automatiques dans Claude Code (pas dans Codex)
 | Hook | Déclencheur | Action |
 |---|---|---|
 | `SessionStart` | Début de session | Injecte branche + tâche "En cours" + dernière entrée DEVLOG dans le contexte |

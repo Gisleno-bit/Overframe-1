@@ -33,8 +33,9 @@ pnpm make         # build + package an installer (electron-forge)
 # Landing page
 pnpm --filter overframe-landing dev      # local dev server
 pnpm --filter overframe-landing build    # static export ready for hosting
-pnpm --filter overframe-landing start    # serve the built site locally
 ```
+
+`landing/next.config.mjs` sets `output: 'export'`; the build produces static files in `landing/out`. The package's `start` script is currently `next start`, so it is not a static-export preview workflow. See [landing/README.md](landing/README.md) for the documented build/hosting distinction.
 
 ## Adding a new workspace
 
