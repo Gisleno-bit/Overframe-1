@@ -150,6 +150,7 @@ app.whenReady().then(() => {
   tabs = new TabManager(overlay)
   tabs.setDarkMode(initialDark)
   sessionManager = new SessionManager(tabs)
+  sessionManager.deferRestore(active.id)
 
   store.set('sessionDirty', true)
 
@@ -218,7 +219,6 @@ app.whenReady().then(() => {
 
   // ── Profile events ─────────────────────────────────────────────────────────
 
-  let pendingSessionRestore: { profileId: string } | null = null
   /**
    * True when the overlay was automatically hidden by game detection
    * (i.e. the user did not explicitly hide it). Used to restore the overlay
@@ -246,10 +246,9 @@ app.whenReady().then(() => {
     // (e.g. YouTube autoplay while working without the overlay).
     const { protectedDomains } = store.get('settings')
     const protected_ = protectedDomains ?? DEFAULT_PROTECTED_DOMAINS
+    sessionManager?.deferRestore(profile.id)
     if (overlay.getState() !== 'HIDDEN') {
-      sessionManager?.restore(profile.id, protected_)
-    } else {
-      pendingSessionRestore = { profileId: profile.id }
+      sessionManager?.restorePending(protected_)
     }
   })
 
@@ -346,13 +345,9 @@ app.whenReady().then(() => {
       startMemorySnapshots()
       // Return to fast-poll so auto-detection toasts appear without delay.
       profiles?.setPollMode('active')
-      // Apply deferred session restore before resumeAll so closeAll() clears
-      // the previous profile's tabs before reloading the new ones.
-      if (pendingSessionRestore) {
-        const p = pendingSessionRestore
-        pendingSessionRestore = null
-        sessionManager?.restore(p.profileId, store.get('settings').protectedDomains ?? DEFAULT_PROTECTED_DOMAINS)
-      }
+      // The window is now shown. Restore the initial/latest selected session
+      // exactly once, before resuming tabs; unrequested sessions stay deferred.
+      sessionManager?.restorePending(store.get('settings').protectedDomains ?? DEFAULT_PROTECTED_DOMAINS)
       tabs?.resumeAll()
       tabs?.resumePausedMedia()
       // Overlay is visible again → bring back the IG promo if it was only
@@ -379,20 +374,10 @@ app.whenReady().then(() => {
 
   profiles.startPolling()
 
-  /**
-   * Lazy session restore: load tabs only when the overlay is first shown.
-   * Keeps the process idle (zero web traffic) while hidden at startup or during
-   * a game session where the user hasn't opened the overlay yet.
-   */
   // Retract the IG promo before the overlay's Alt+B hide churn — but keep it
   // "wanted" so it re-appears when the overlay is shown again (restored in the
   // overlay state-change handler below).
   overlay.onBeforeHide(() => popup?.retractIGPromo())
-
-  overlay.onFirstShow(() => {
-    const current = profiles!.getActive()
-    sessionManager!.restoreOrCreate(current.id)
-  })
 
   if (!process.argv.includes('--hidden')) overlay.show()
 
@@ -420,7 +405,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
 })
 
-app.on('will-quit', () => {
+// Save and release native child views before Electron destroys their host HWND.
+app.on('before-quit', () => {
   if (profiles && sessionManager) {
     sessionManager.save(profiles.getActive().id)
     store.set('sessionDirty', false)
@@ -429,7 +415,7 @@ app.on('will-quit', () => {
     clearInterval(memorySnapshotInterval)
     memorySnapshotInterval = null
   }
-  sessionManager?.stopAutoSave()
+  sessionManager?.dispose()
   shortcuts?.dispose()
   stopGlobalHooks()
   profiles?.stopPolling()

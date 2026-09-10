@@ -70,10 +70,10 @@ Ne pas les casser. Les comprendre avant de toucher au rendu ou aux tabs :
 | Fenêtres compagnes | `index.ts` → `PopupWindow.releaseCompanionWindows()` | Détruit promo IG/achievement au deep-hide, avec recréation lazy |
 | Broadcast mémoire | `index.ts` | Timer 1 Hz actif seulement quand l'overlay est visible |
 | Poll idle/active | `ProfileManager.setPollMode()` | 5 s actif / 15 s idle ; hide demande idle seulement avec le profil par défaut, visibilité/détection de jeu rétablit actif |
-| Restauration lazy | `onFirstShow()` + `SessionManager` | Restaure au premier show ; onglets inactifs différés jusqu'à activation. Le démarrage normal montre l'overlay, `--hidden` le diffère |
+| Restauration lazy | Transition visible → `SessionManager.restorePending()` | Restaure une seule fois la sélection différée ; onglets inactifs différés jusqu'à activation. Le démarrage normal montre l'overlay, `--hidden` le diffère |
 | Sauvegardes | `index.ts`, `SessionManager` | Session toutes les 15 s, retrait d'onglet debouncé 300 ms, changement de profil/quit ; bounds debouncées 500 ms |
 
-**Écart à corriger en code :** l'autosave ne vérifie pas que la restauration initiale/différée a eu lieu. Démarrer `--hidden` ou différer un changement de profil peut écraser une session avant son chargement. Ne pas décrire la restauration comme garantie sans ce correctif et ses tests.
+**Protection des sessions :** `SessionManager` n'autorise la sauvegarde que pour le profil propriétaire des onglets après restauration réussie ; une sélection différée bloque les sauvegardes. Les tests session et fermeture native passent sur la pile consignée dans DEVLOG ; le smoke ne mesure toujours pas la RAM WebView2.
 
 Sources : [index.ts](../../src/main/index.ts), [OverlayWindow.ts](../../src/main/windows/OverlayWindow.ts), [TabManager.ts](../../src/main/managers/TabManager.ts), [SessionManager.ts](../../src/main/managers/SessionManager.ts), [ProfileManager.ts](../../src/main/managers/ProfileManager.ts), [types.ts](../../src/shared/types.ts).
 

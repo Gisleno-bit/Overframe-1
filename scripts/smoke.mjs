@@ -10,11 +10,11 @@
 //
 // Exit 0 = all checks passed, 1 = a check failed or the app did not start.
 
-import electronPath from 'electron'
-import { spawn, execSync } from 'node:child_process'
+import { execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createTestState, launchTestApp } from './test-runtime.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const entry = join(root, 'out', 'main', 'index.js')
@@ -41,18 +41,9 @@ function check(name, ok, detail = '') {
   if (!ok) failures++
 }
 
-// IMPORTANT: when this runs inside an Electron host (e.g. a VSCode integrated
-// terminal), ELECTRON_RUN_AS_NODE=1 is inherited and would make our child run as
-// plain Node (electron.app === undefined). Strip it so Electron boots normally.
-const childEnv = { ...process.env, NODE_ENV: 'development' }
-delete childEnv.ELECTRON_RUN_AS_NODE
-delete childEnv.ELECTRON_NO_ATTACH_CONSOLE
-
-const child = spawn(electronPath, [entry], {
-  cwd: root,
-  env: childEnv,
-  stdio: 'ignore',
-})
+const testState = createTestState()
+console.log(`[smoke] isolated test data: ${testState.root}`)
+const child = launchTestApp(testState)
 
 function killApp() {
   try {

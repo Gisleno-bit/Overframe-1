@@ -56,7 +56,9 @@ describe('SessionManager.save', () => {
       { id: 'c', url: 'http://c', title: 'C' },
     ])
     t.setActiveId('c')
-    new SessionManager(t.mgr).save('p1')
+    const sm = new SessionManager(t.mgr)
+    sm.restoreOrCreate('p1')
+    sm.save('p1')
     expect(h.sessions.p1.tabs).toEqual([
       { url: 'https://a', title: 'A', favicon: 'fa' },
       { url: 'http://c', title: 'C' },
@@ -68,13 +70,17 @@ describe('SessionManager.save', () => {
   it('falls back to index 0 when the active tab is not an http tab', () => {
     const t = makeTabs([{ id: 'a', url: 'https://a', title: 'A' }])
     t.setActiveId('ghost')
-    new SessionManager(t.mgr).save('p1')
+    const sm = new SessionManager(t.mgr)
+    sm.restoreOrCreate('p1')
+    sm.save('p1')
     expect(h.sessions.p1.activeTabIndex).toBe(0)
   })
 
   it('stores an empty session when there are no http(s) tabs', () => {
     const t = makeTabs([{ id: 'a', url: 'about:blank', title: 'blank' }])
-    new SessionManager(t.mgr).save('p1')
+    const sm = new SessionManager(t.mgr)
+    sm.restoreOrCreate('p1')
+    sm.save('p1')
     expect(h.sessions.p1.tabs).toEqual([])
     expect(h.sessions.p1.activeTabIndex).toBe(0)
   })
@@ -216,6 +222,7 @@ describe('SessionManager auto-save', () => {
   it('saves on the interval and is idempotent', () => {
     const t = makeTabs([{ id: 'a', url: 'https://a', title: 'A' }])
     const sm = new SessionManager(t.mgr)
+    sm.restoreOrCreate('p1')
     sm.startAutoSave(() => 'p1')
     sm.startAutoSave(() => 'p1') // second call is a no-op (already running)
     vi.advanceTimersByTime(15_000)
